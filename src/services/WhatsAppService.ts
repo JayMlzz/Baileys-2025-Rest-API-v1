@@ -36,6 +36,21 @@ export class WhatsAppService {
     }
   }
 
+  /**
+   * Convert Baileys message status (numeric) to MessageStatus enum
+   * Baileys status codes: 0=UNSENT, 1=SENT, 2=DELIVERED, 3=READ, 4=PLAYED
+   */
+  private mapBaileysStatusToMessageStatus(status: number): string {
+    const statusMap: Record<number, string> = {
+      0: 'PENDING',
+      1: 'SENT',
+      2: 'DELIVERED',
+      3: 'READ',
+      4: 'READ' // PLAYED also maps to READ
+    };
+    return statusMap[status] || 'PENDING';
+  }
+
   async createSession(sessionId: string, userId: string, usePairingCode = false): Promise<WhatsAppSession> {
     try {
       if (this.sessions.has(sessionId)) {
@@ -90,7 +105,7 @@ export class WhatsAppService {
 
       // ADD 8-Maret-2026, FIX 1: Gunakan Map (.has dan .set) agar memori sesi tidak bocor
       if (!this.sessions.has(sessionId)) {
-        this.sessions.set(sessionId, {} as any);
+        this.sessions.set(sessionId, {} as WhatsAppSession);
       }
 
       const session = this.sessions.get(sessionId)!;
@@ -263,11 +278,13 @@ export class WhatsAppService {
       try {
         const { key, update: messageUpdate } = update;
         
-        if (messageUpdate.status) {
+        if (messageUpdate.status !== undefined && messageUpdate.status !== null) {
+          // Convert numeric Baileys status to MessageStatus enum
+          const mappedStatus = this.mapBaileysStatusToMessageStatus(messageUpdate.status);
           await this.dbService.updateMessageStatus(
             key.id!,
             sessionId,
-            messageUpdate.status
+            mappedStatus
           );
         }
 
@@ -491,5 +508,56 @@ export class WhatsAppService {
     this.sessions.clear();
     await this.dbService.disconnect();
     logger.info('WhatsApp service shutdown complete');
+  }
+
+  /**
+   * Recover and reconnect to all existing active sessions
+   * This is called when the server starts to re-establish connections
+   */
+  async recoverSessions(): Promise<void> {
+    try {
+      logger.info('Recovering existing sessions...');
+      
+      // Get all active sessions from database
+      const allSessions = await this.dbService.getAllActiveSessions();
+      
+      if (allSessions.length === 0) {
+        logger.info('No active sessions to recover');
+        return;
+      }
+
+      logger.info(`Found ${allSessions.length} active sessions to recover`);
+
+      // Reconnect to each session
+      for (const dbSession of allSessions) {
+        try {
+          const { sessionId, userId } = dbSession;
+          
+          // Check if auth credentials exist
+          const authDir = join(process.cwd(), 'auth_sessions', sessionId);
+          if (!existsSync(authDir)) {
+            logger.warn(`Auth directory not found for session ${sessionId}, skipping recovery`);
+            continue;
+          }
+
+          logger.info(`Recovering session ${sessionId}...`);
+          
+          // Initialize the connection without waiting for user interaction
+          await this.initializeWhatsAppConnection(sessionId, false);
+          
+          // Update session status to CONNECTING
+          await this.updateSessionInDatabase(sessionId, { status: 'CONNECTING' });
+          
+          logger.info(`Session ${sessionId} connection initiated`);
+        } catch (error) {
+          whatsappLogger.error(`Failed to recover session ${dbSession.sessionId}:`, error);
+          // Continue with next session even if one fails
+        }
+      }
+
+      logger.info('Session recovery process completed');
+    } catch (error) {
+      logger.error('Error during session recovery:', error);
+    }
   }
 }

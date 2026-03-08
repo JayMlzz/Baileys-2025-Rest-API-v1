@@ -81,7 +81,7 @@ const swaggerUiOptions = {
   ]
 };
 
-const swaggerSpec = swaggerJsdoc(swaggerOptions, swaggerUiOptions);
+const swaggerSpec = swaggerJsdoc(swaggerOptions);
 
 // Rate limiting
 const limiter = rateLimit({
@@ -105,7 +105,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(limiter);
 
 // API Documentation
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, swaggerUiOptions));
 
 // Health check
 app.get('/health', (req, res) => {
@@ -151,6 +151,15 @@ io.on('connection', (socket) => {
 // Initialize services
 const databaseService = new DatabaseService();
 const whatsAppService = new WhatsAppService(io);
+
+// Recover existing sessions on startup
+(async () => {
+  try {
+    await whatsAppService.recoverSessions();
+  } catch (error) {
+    logger.error('Failed to recover sessions:', error);
+  }
+})();
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {

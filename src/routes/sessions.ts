@@ -28,7 +28,15 @@ router.get('/', asyncHandler(async (req, res) => {
   const enhancedSessions = await Promise.all(sessions.map(async session => {
     const liveSession = await whatsAppService.getSession(session.sessionId);
     return {
-      ...session,
+      id: session.id,
+      sessionId: session.sessionId,
+      phoneNumber: session.phoneNumber,
+      name: session.name,
+      status: session.status,
+      isActive: session.isActive,
+      metadata: session.metadata,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
       liveStatus: liveSession?.status || SessionStatus.DISCONNECTED,
       qrCode: liveSession?.qrCode,
       pairingCode: liveSession?.pairingCode
@@ -89,9 +97,29 @@ router.post('/', [
   // Create session
   const session = await whatsAppService.createSession(sessionId, req.user!.id, usePairingCode);
 
+  // Fetch the created session from database to get complete data
+  const dbSession = await dbService.getSession(sessionId);
+  const liveSession = await whatsAppService.getSession(sessionId);
+
+  // Combine database data with live status
+  const sessionData = {
+    id: dbSession?.id,
+    sessionId: dbSession?.sessionId,
+    phoneNumber: dbSession?.phoneNumber,
+    name: dbSession?.name,
+    status: dbSession?.status,
+    isActive: dbSession?.isActive,
+    metadata: dbSession?.metadata,
+    createdAt: dbSession?.createdAt,
+    updatedAt: dbSession?.updatedAt,
+    liveStatus: liveSession?.status || SessionStatus.DISCONNECTED,
+    qrCode: liveSession?.qrCode,
+    pairingCode: liveSession?.pairingCode
+  };
+
   res.status(201).json({
     success: true,
-    data: session,
+    data: sessionData,
     message: 'Session created successfully',
     timestamp: new Date().toISOString()
   } as ApiResponse);
@@ -133,8 +161,17 @@ router.get('/:sessionId', [
     } as ApiResponse);
   }
 
+  // Sanitize session data (exclude socket which has circular references)
   const sessionData = {
-    ...dbSession,
+    id: dbSession.id,
+    sessionId: dbSession.sessionId,
+    phoneNumber: dbSession.phoneNumber,
+    name: dbSession.name,
+    status: dbSession.status,
+    isActive: dbSession.isActive,
+    metadata: dbSession.metadata,
+    createdAt: dbSession.createdAt,
+    updatedAt: dbSession.updatedAt,
     liveStatus: liveSession?.status || SessionStatus.DISCONNECTED,
     qrCode: liveSession?.qrCode,
     pairingCode: liveSession?.pairingCode

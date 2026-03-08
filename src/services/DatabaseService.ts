@@ -174,6 +174,21 @@ export class DatabaseService {
     });
   }
 
+  async getAllActiveSessions() {
+    return this.prisma.session.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        sessionId: true,
+        userId: true,
+        status: true,
+        phoneNumber: true,
+        name: true
+      },
+      orderBy: { createdAt: 'asc' }
+    });
+  }
+
   async deleteSession(sessionId: string) {
     return this.prisma.session.update({
       where: { sessionId },
@@ -225,6 +240,12 @@ export class DatabaseService {
 
   async updateMessageStatus(messageId: string, sessionId: string, status: string) {
     try {
+      // Validate status is a valid MessageStatus enum
+      const validStatuses = ['PENDING', 'SENT', 'DELIVERED', 'READ', 'FAILED'];
+      if (!validStatuses.includes(status)) {
+        throw new Error(`Invalid message status: ${status}. Must be one of: ${validStatuses.join(', ')}`);
+      }
+
       // Resolve sessionId string to session's internal ID
       const session = await this.prisma.session.findUnique({
         where: { sessionId },
@@ -243,6 +264,7 @@ export class DatabaseService {
       logger.error({
         sessionId,
         messageId,
+        status,
         error: error instanceof Error ? error.message : String(error)
       }, 'Failed to update message status');
       throw error;
