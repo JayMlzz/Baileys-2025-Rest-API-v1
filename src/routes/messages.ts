@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { body, param, query } from 'express-validator';
+import { body, param, query, validationResult } from 'express-validator';
 import multer from 'multer';
 import { handleValidationErrors, asyncHandler } from '../middleware/errorHandler';
 import { sessionMiddleware } from '../middleware/auth';
@@ -7,6 +7,7 @@ import { whatsAppService } from '../app';
 import { DatabaseService } from '../services/DatabaseService';
 import { ApiResponse, SendMessageRequest, MessageType } from '../Types/api';
 import { downloadContentFromMessage } from '../Utils/messages-media';
+import { isValidJid, isValidSessionId, isValidMessageText, isValidMentions } from '../Utils/validation';
 
 const router = Router();
 const dbService = new DatabaseService();
@@ -137,11 +138,23 @@ router.get('/:sessionId', [
  *         description: Message sent successfully
  */
 router.post('/:sessionId/send', [
-  param('sessionId').notEmpty(),
-  body('to').notEmpty().trim(),
-  body('content.text').notEmpty().trim(),
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  body('to').notEmpty().trim().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid recipient JID format');
+    return true;
+  }),
+  body('content.text').notEmpty().trim().custom((value) => {
+    if (!isValidMessageText(value)) throw new Error('Message text must not exceed 4096 characters');
+    return true;
+  }),
   body('options.quoted').optional().isString(),
-  body('options.mentions').optional().isArray()
+  body('options.mentions').optional().custom((value) => {
+    if (value && !isValidMentions(value)) throw new Error('Invalid mention JID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
   const { to, content, options = {} } = req.body;
@@ -212,9 +225,18 @@ router.post('/:sessionId/send', [
  *         description: Media message sent successfully
  */
 router.post('/:sessionId/send-media', upload.single('file'), [
-  param('sessionId').notEmpty(),
-  body('to').notEmpty().trim(),
-  body('caption').optional().trim(),
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  body('to').notEmpty().trim().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid recipient JID format');
+    return true;
+  }),
+  body('caption').optional().trim().custom((value) => {
+    if (value && !isValidMessageText(value, 1024)) throw new Error('Caption must not exceed 1024 characters');
+    return true;
+  }),
   body('fileName').optional().trim()
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
@@ -317,12 +339,18 @@ router.post('/:sessionId/send-media', upload.single('file'), [
  *         description: Location message sent successfully
  */
 router.post('/:sessionId/send-location', [
-  param('sessionId').notEmpty(),
-  body('to').notEmpty().trim(),
-  body('latitude').isFloat({ min: -90, max: 90 }),
-  body('longitude').isFloat({ min: -180, max: 180 }),
-  body('name').optional().trim(),
-  body('address').optional().trim()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  body('to').notEmpty().trim().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid recipient JID format');
+    return true;
+  }),
+  body('latitude').isFloat({ min: -90, max: 90 }).withMessage('Latitude must be between -90 and 90'),
+  body('longitude').isFloat({ min: -180, max: 180 }).withMessage('Longitude must be between -180 and 180'),
+  body('name').optional().trim().isLength({ max: 100 }).withMessage('Location name must not exceed 100 characters'),
+  body('address').optional().trim().isLength({ max: 256 }).withMessage('Location address must not exceed 256 characters')
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
   const { to, latitude, longitude, name, address } = req.body;
@@ -390,10 +418,16 @@ router.post('/:sessionId/send-location', [
  *         description: Reaction sent successfully
  */
 router.post('/:sessionId/send-reaction', [
-  param('sessionId').notEmpty(),
-  body('to').notEmpty().trim(),
-  body('messageId').notEmpty().trim(),
-  body('emoji').notEmpty().trim()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  body('to').notEmpty().trim().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid recipient JID format');
+    return true;
+  }),
+  body('messageId').notEmpty().trim().isLength({ min: 1, max: 100 }).withMessage('Invalid message ID'),
+  body('emoji').notEmpty().trim().isLength({ min: 1, max: 10 }).withMessage('Emoji must be 1-10 characters')
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
   const { to, messageId, emoji } = req.body;
@@ -460,9 +494,15 @@ router.post('/:sessionId/send-reaction', [
  *         description: Typing indicator sent successfully
  */
 router.post('/:sessionId/typing', [
-  param('sessionId').notEmpty(),
-  body('chatId').notEmpty().trim(),
-  body('isTyping').optional().isBoolean()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  body('chatId').notEmpty().trim().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid chat JID format');
+    return true;
+  }),
+  body('isTyping').optional().isBoolean().withMessage('isTyping must be a boolean')
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
   const { chatId, isTyping = true } = req.body;
@@ -514,8 +554,14 @@ router.post('/:sessionId/typing', [
  *         description: Chat marked as read
  */
 router.post('/:sessionId/mark-read', [
-  param('sessionId').notEmpty(),
-  body('chatId').notEmpty().trim()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  body('chatId').notEmpty().trim().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid chat JID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
   const { chatId } = req.body;
@@ -570,9 +616,15 @@ router.post('/:sessionId/mark-read', [
  *         description: Message deleted successfully
  */
 router.post('/:sessionId/delete', [
-  param('sessionId').notEmpty(),
-  body('chatId').notEmpty().trim(),
-  body('messageId').notEmpty().trim()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  body('chatId').notEmpty().trim().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid chat JID format');
+    return true;
+  }),
+  body('messageId').notEmpty().trim().isLength({ min: 1, max: 100 }).withMessage('Invalid message ID')
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
   const { chatId, messageId } = req.body;
@@ -640,10 +692,16 @@ router.post('/:sessionId/delete', [
  *         description: Message edited successfully
  */
 router.post('/:sessionId/edit', [
-  param('sessionId').notEmpty(),
-  body('chatId').notEmpty().trim(),
-  body('messageId').notEmpty().trim(),
-  body('newText').notEmpty().trim().isLength({ min: 1, max: 4096 })
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  body('chatId').notEmpty().trim().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid chat JID format');
+    return true;
+  }),
+  body('messageId').notEmpty().trim().isLength({ min: 1, max: 100 }).withMessage('Invalid message ID'),
+  body('newText').notEmpty().trim().isLength({ min: 1, max: 4096 }).withMessage('Message text must be 1-4096 characters')
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
   const { chatId, messageId, newText } = req.body;

@@ -5,6 +5,7 @@ import { sessionMiddleware } from '../middleware/auth';
 import { whatsAppService } from '../app';
 import { DatabaseService } from '../services/DatabaseService';
 import { ApiResponse } from '../Types/api';
+import { isValidSessionId, isValidJid } from '../Utils/validation';
 
 const router = Router();
 const dbService = new DatabaseService();
@@ -28,7 +29,10 @@ const dbService = new DatabaseService();
  *         description: Chats retrieved successfully
  */
 router.get('/:sessionId', [
-  param('sessionId').notEmpty()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
 
@@ -65,8 +69,14 @@ router.get('/:sessionId', [
  *         description: Chat archived successfully
  */
 router.post('/:sessionId/:chatId/archive', [
-  param('sessionId').notEmpty(),
-  param('chatId').notEmpty()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  param('chatId').notEmpty().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid chat JID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId, chatId } = req.params;
 
@@ -128,8 +138,14 @@ router.post('/:sessionId/:chatId/archive', [
  *         description: Chat unarchived successfully
  */
 router.post('/:sessionId/:chatId/unarchive', [
-  param('sessionId').notEmpty(),
-  param('chatId').notEmpty()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  param('chatId').notEmpty().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid chat JID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId, chatId } = req.params;
 
@@ -191,8 +207,14 @@ router.post('/:sessionId/:chatId/unarchive', [
  *         description: Chat pinned successfully
  */
 router.post('/:sessionId/:chatId/pin', [
-  param('sessionId').notEmpty(),
-  param('chatId').notEmpty()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  param('chatId').notEmpty().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid chat JID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId, chatId } = req.params;
 
@@ -254,8 +276,14 @@ router.post('/:sessionId/:chatId/pin', [
  *         description: Chat unpinned successfully
  */
 router.post('/:sessionId/:chatId/unpin', [
-  param('sessionId').notEmpty(),
-  param('chatId').notEmpty()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  param('chatId').notEmpty().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid chat JID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId, chatId } = req.params;
 
@@ -372,8 +400,14 @@ router.delete('/:sessionId/:chatId/delete', [
  *         description: Chat marked as read successfully
  */
 router.post('/:sessionId/:chatId/mark-read', [
-  param('sessionId').notEmpty(),
-  param('chatId').notEmpty()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  param('chatId').notEmpty().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid chat JID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId, chatId } = req.params;
 

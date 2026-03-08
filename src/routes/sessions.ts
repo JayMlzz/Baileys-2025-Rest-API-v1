@@ -5,6 +5,7 @@ import { sessionMiddleware } from '../middleware/auth';
 import { whatsAppService } from '../app';
 import { DatabaseService } from '../services/DatabaseService';
 import { ApiResponse, SessionStatus } from '../Types/api';
+import { isValidSessionId, isValidPhoneNumber } from '../Utils/validation';
 
 const router = Router();
 const dbService = new DatabaseService();
@@ -79,8 +80,11 @@ router.get('/', asyncHandler(async (req, res) => {
  *         description: Session already exists
  */
 router.post('/', [
-  body('sessionId').notEmpty().trim().isLength({ min: 1, max: 50 }),
-  body('usePairingCode').optional().isBoolean()
+  body('sessionId').notEmpty().trim().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format (3-100 alphanumeric characters)');
+    return true;
+  }),
+  body('usePairingCode').optional().isBoolean().withMessage('usePairingCode must be a boolean')
 ], handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId, usePairingCode = false } = req.body;
 
@@ -146,7 +150,10 @@ router.post('/', [
  *         description: Session not found
  */
 router.get('/:sessionId', [
-  param('sessionId').notEmpty()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
   
@@ -205,7 +212,10 @@ router.get('/:sessionId', [
  *         description: Session not found
  */
 router.delete('/:sessionId', [
-  param('sessionId').notEmpty()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
 
@@ -239,7 +249,10 @@ router.delete('/:sessionId', [
  *         description: Session not found or QR code not available
  */
 router.get('/:sessionId/qr', [
-  param('sessionId').notEmpty()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
   
@@ -296,8 +309,14 @@ router.get('/:sessionId/qr', [
  *         description: Invalid phone number or session not ready
  */
 router.post('/:sessionId/pairing-code', [
-  param('sessionId').notEmpty(),
-  body('phoneNumber').isMobilePhone('any').withMessage('Invalid phone number')
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  body('phoneNumber').notEmpty().trim().custom((value) => {
+    if (!isValidPhoneNumber(value)) throw new Error('Invalid international phone number format (7-15 digits)');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
   const { phoneNumber } = req.body;
@@ -343,7 +362,10 @@ router.post('/:sessionId/pairing-code', [
  *         description: Session status retrieved successfully
  */
 router.get('/:sessionId/status', [
-  param('sessionId').notEmpty()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
   

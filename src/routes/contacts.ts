@@ -5,6 +5,7 @@ import { sessionMiddleware } from '../middleware/auth';
 import { whatsAppService } from '../app';
 import { DatabaseService } from '../services/DatabaseService';
 import { ApiResponse } from '../Types/api';
+import { isValidSessionId, isValidJid } from '../Utils/validation';
 
 const router = Router();
 const dbService = new DatabaseService();
@@ -28,7 +29,10 @@ const dbService = new DatabaseService();
  *         description: Contacts retrieved successfully
  */
 router.get('/:sessionId', [
-  param('sessionId').notEmpty()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
 
@@ -65,8 +69,14 @@ router.get('/:sessionId', [
  *         description: Profile picture URL retrieved successfully
  */
 router.get('/:sessionId/:contactId/profile-picture', [
-  param('sessionId').notEmpty(),
-  param('contactId').notEmpty()
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  param('contactId').notEmpty().custom((value) => {
+    if (!isValidJid(value)) throw new Error('Invalid contact JID format');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId, contactId } = req.params;
 

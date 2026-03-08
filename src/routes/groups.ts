@@ -4,6 +4,7 @@ import { handleValidationErrors, asyncHandler } from '../middleware/errorHandler
 import { sessionMiddleware } from '../middleware/auth';
 import { whatsAppService } from '../app';
 import { ApiResponse } from '../Types/api';
+import { isValidSessionId, isValidGroupName, isValidGroupDescription, isValidParticipants } from '../Utils/validation';
 
 const router = Router();
 
@@ -44,11 +45,22 @@ const router = Router();
  *         description: Group created successfully
  */
 router.post('/:sessionId/create', [
-  param('sessionId').notEmpty(),
-  body('subject').notEmpty().trim().isLength({ min: 1, max: 100 }),
-  body('participants').isArray({ min: 1 }),
-  body('participants.*').isString().notEmpty(),
-  body('description').optional().trim().isLength({ max: 500 })
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  body('subject').notEmpty().trim().custom((value) => {
+    if (!isValidGroupName(value)) throw new Error('Group name must be 1-100 characters');
+    return true;
+  }),
+  body('participants').isArray({ min: 1 }).withMessage('Participants must be a non-empty array').custom((value) => {
+    if (!isValidParticipants(value)) throw new Error('Invalid participant JID or phone number format');
+    return true;
+  }),
+  body('description').optional().trim().custom((value) => {
+    if (value && !isValidGroupDescription(value)) throw new Error('Group description must not exceed 500 characters');
+    return true;
+  })
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
   const { subject, participants, description } = req.body;

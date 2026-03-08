@@ -6,6 +6,7 @@ import { whatsAppService } from '../app';
 import { DatabaseService } from '../services/DatabaseService';
 import { ApiResponse } from '../Types/api';
 import { downloadContentFromMessage } from '../Utils/messages-media';
+import { isValidSessionId } from '../Utils/validation';
 
 const router = Router();
 const dbService = new DatabaseService();
@@ -39,9 +40,12 @@ const dbService = new DatabaseService();
  *               format: binary
  */
 router.get('/:sessionId/download/:messageId', [
-  param('sessionId').notEmpty(),
-  param('messageId').notEmpty(),
-  query('type').optional().isIn(['image', 'video', 'audio', 'document'])
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  param('messageId').notEmpty().trim().isLength({ min: 1, max: 100 }).withMessage('Invalid message ID'),
+  query('type').optional().isIn(['image', 'video', 'audio', 'document']).withMessage('Invalid media type')
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId, messageId } = req.params;
   const { type } = req.query;
