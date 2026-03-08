@@ -4,6 +4,7 @@ import { BaileysMessageContent } from '../Types/api';
 
 export class DatabaseService {
   private prisma: PrismaClient;
+  private sessionIdCache: Map<string, string> = new Map(); // Cache: sessionId string -> internal CUID ID
 
   constructor() {
     this.prisma = new PrismaClient({
@@ -58,6 +59,46 @@ export class DatabaseService {
         message: e.message
       }, 'Database Warning');
     });
+  }
+
+  /**
+   * Resolve sessionId string to internal CUID ID with caching
+   * Caches the result to avoid repeated database lookups
+   */
+  private async resolveSessionId(sessionId: string): Promise<string> {
+    // Check cache first
+    if (this.sessionIdCache.has(sessionId)) {
+      return this.sessionIdCache.get(sessionId)!;
+    }
+
+    try {
+      // Query database if not cached
+      const session = await this.prisma.session.findUnique({
+        where: { sessionId },
+        select: { id: true }
+      });
+
+      if (!session) {
+        throw new Error(`Session not found: ${sessionId}`);
+      }
+
+      // Cache the mapping for future use
+      this.sessionIdCache.set(sessionId, session.id);
+      return session.id;
+    } catch (error) {
+      logger.error({
+        sessionId,
+        error: error instanceof Error ? error.message : String(error)
+      }, 'Failed to resolve session ID');
+      throw error;
+    }
+  }
+
+  /**
+   * Clear session ID cache for a specific session (call after session is deleted)
+   */
+  clearSessionIdCache(sessionId: string): void {
+    this.sessionIdCache.delete(sessionId);
   }
 
   async connect() {
@@ -212,15 +253,8 @@ export class DatabaseService {
     metadata?: any;
   }) {
     try {
-      // Resolve sessionId string to session's internal ID
-      const session = await this.prisma.session.findUnique({
-        where: { sessionId: data.sessionId },
-        select: { id: true }
-      });
-
-      if (!session) {
-        throw new Error(`Session not found: ${data.sessionId}`);
-      }
+      // Resolve sessionId string to session's internal ID (with caching)
+      const sessionInternalId = await this.resolveSessionId(data.sessionId);
 
       // Ensure content is not undefined (use empty object if not provided)
       const content = data.content || {};
@@ -230,7 +264,7 @@ export class DatabaseService {
       return this.prisma.message.upsert({
         where: {
           sessionId_messageId: {
-            sessionId: session.id,
+            sessionId: sessionInternalId,
             messageId: data.messageId
           }
         },
@@ -244,7 +278,7 @@ export class DatabaseService {
         create: {
           // Create new message with all fields
           messageId: data.messageId,
-          sessionId: session.id,
+          sessionId: sessionInternalId,
           chatId: data.chatId,
           fromMe: data.fromMe,
           fromJid: data.fromJid,
@@ -274,18 +308,11 @@ export class DatabaseService {
         throw new Error(`Invalid message status: ${status}. Must be one of: ${validStatuses.join(', ')}`);
       }
 
-      // Resolve sessionId string to session's internal ID
-      const session = await this.prisma.session.findUnique({
-        where: { sessionId },
-        select: { id: true }
-      });
-
-      if (!session) {
-        throw new Error(`Session not found: ${sessionId}`);
-      }
+      // Resolve sessionId string to session's internal ID (with caching)
+      const sessionInternalId = await this.resolveSessionId(sessionId);
 
       return this.prisma.message.updateMany({
-        where: { messageId, sessionId: session.id },
+        where: { messageId, sessionId: sessionInternalId },
         data: { status: status as any }
       });
     } catch (error) {
@@ -301,19 +328,12 @@ export class DatabaseService {
 
   async getMessages(sessionId: string, chatId?: string, limit = 50, offset = 0) {
     try {
-      // Resolve sessionId string to session's internal ID
-      const session = await this.prisma.session.findUnique({
-        where: { sessionId },
-        select: { id: true }
-      });
-
-      if (!session) {
-        throw new Error(`Session not found: ${sessionId}`);
-      }
+      // Resolve sessionId string to session's internal ID (with caching)
+      const sessionInternalId = await this.resolveSessionId(sessionId);
 
       return this.prisma.message.findMany({
         where: {
-          sessionId: session.id,
+          sessionId: sessionInternalId,
           ...(chatId && { chatId })
         },
         orderBy: { timestamp: 'desc' },
@@ -332,46 +352,34 @@ export class DatabaseService {
 
   async getMessageByMessageId(messageId: string, sessionId: string) {
   try {
-    const session = await this.prisma.session.findUnique({
-      where: { sessionId },
-      select: { id: true }
-    });
+      // Resolve sessionId string to session's internal ID (with caching)
+      const sessionInternalId = await this.resolveSessionId(sessionId);
 
-    if (!session) {
-      throw new Error(`Session not found: ${sessionId}`);
-    }
-
-    return this.prisma.message.findFirst({
-      where: {
+      return this.prisma.message.findFirst({
+        where: {
+          messageId,
+          sessionId: sessionInternalId
+        }
+      });
+    } catch (error) {
+      logger.error({
+        sessionId,
         messageId,
-        sessionId: session.id
-      }
-    });
-  } catch (error) {
-    logger.error({
-      sessionId,
-      messageId,
-      error: error instanceof Error ? error.message : String(error)
-    }, 'Failed to get message by ID');
-    throw error;
+        error: error instanceof Error ? error.message : String(error)
+      }, 'Failed to get message by ID');
+      throw error;
+    }
   }
-}
 
 async deleteMessage(messageId: string, sessionId: string) {
   try {
-    const session = await this.prisma.session.findUnique({
-      where: { sessionId },
-      select: { id: true }
-    });
-
-    if (!session) {
-      throw new Error(`Session not found: ${sessionId}`);
-    }
+    // Resolve sessionId string to session's internal ID (with caching)
+    const sessionInternalId = await this.resolveSessionId(sessionId);
 
     return this.prisma.message.deleteMany({
       where: {
         messageId,
-        sessionId: session.id
+        sessionId: sessionInternalId
       }
     });
   } catch (error) {
@@ -398,20 +406,13 @@ async deleteMessage(messageId: string, sessionId: string) {
     metadata?: any;
   }) {
     try {
-      // Resolve sessionId string to session's internal ID
-      const session = await this.prisma.session.findUnique({
-        where: { sessionId: data.sessionId },
-        select: { id: true }
-      });
-
-      if (!session) {
-        throw new Error(`Session not found: ${data.sessionId}`);
-      }
+      // Resolve sessionId string to session's internal ID (with caching)
+      const sessionInternalId = await this.resolveSessionId(data.sessionId);
 
       return this.prisma.chat.upsert({
         where: {
           sessionId_jid: {
-            sessionId: session.id,
+            sessionId: sessionInternalId,
             jid: data.jid
           }
         },
@@ -427,7 +428,7 @@ async deleteMessage(messageId: string, sessionId: string) {
         },
         create: {
           ...data,
-          sessionId: session.id
+          sessionId: sessionInternalId
         }
       });
     } catch (error) {
@@ -442,18 +443,11 @@ async deleteMessage(messageId: string, sessionId: string) {
 
   async getChats(sessionId: string) {
     try {
-      // Resolve sessionId string to session's internal ID
-      const session = await this.prisma.session.findUnique({
-        where: { sessionId },
-        select: { id: true }
-      });
-
-      if (!session) {
-        throw new Error(`Session not found: ${sessionId}`);
-      }
+      // Resolve sessionId string to session's internal ID (with caching)
+      const sessionInternalId = await this.resolveSessionId(sessionId);
 
       return this.prisma.chat.findMany({
-        where: { sessionId: session.id },
+        where: { sessionId: sessionInternalId },
         orderBy: { updatedAt: 'desc' }
       });
     } catch (error) {
@@ -476,20 +470,13 @@ async deleteMessage(messageId: string, sessionId: string) {
     metadata?: any;
   }) {
     try {
-      // Resolve sessionId string to session's internal ID
-      const session = await this.prisma.session.findUnique({
-        where: { sessionId: data.sessionId },
-        select: { id: true }
-      });
-
-      if (!session) {
-        throw new Error(`Session not found: ${data.sessionId}`);
-      }
+      // Resolve sessionId string to session's internal ID (with caching)
+      const sessionInternalId = await this.resolveSessionId(data.sessionId);
 
       return this.prisma.contact.upsert({
         where: {
           sessionId_jid: {
-            sessionId: session.id,
+            sessionId: sessionInternalId,
             jid: data.jid
           }
         },
@@ -503,7 +490,7 @@ async deleteMessage(messageId: string, sessionId: string) {
         },
         create: {
           ...data,
-          sessionId: session.id
+          sessionId: sessionInternalId
         }
       });
     } catch (error) {
@@ -518,18 +505,11 @@ async deleteMessage(messageId: string, sessionId: string) {
 
   async getContacts(sessionId: string) {
     try {
-      // Resolve sessionId string to session's internal ID
-      const session = await this.prisma.session.findUnique({
-        where: { sessionId },
-        select: { id: true }
-      });
-
-      if (!session) {
-        throw new Error(`Session not found: ${sessionId}`);
-      }
+      // Resolve sessionId string to session's internal ID (with caching)
+      const sessionInternalId = await this.resolveSessionId(sessionId);
 
       return this.prisma.contact.findMany({
-        where: { sessionId: session.id },
+        where: { sessionId: sessionInternalId },
         orderBy: { name: 'asc' }
       });
     } catch (error) {
@@ -537,6 +517,51 @@ async deleteMessage(messageId: string, sessionId: string) {
         sessionId,
         error: error instanceof Error ? error.message : String(error)
       }, 'Failed to get contacts');
+      throw error;
+    }
+  }
+
+  async upsertGroup(data: {
+    sessionId: string;
+    jid: string;
+    subject: string;
+    description?: string;
+    owner?: string;
+    participants?: any;
+    settings?: any;
+    metadata?: any;
+  }) {
+    try {
+      // Resolve sessionId string to session's internal ID (with caching)
+      const sessionInternalId = await this.resolveSessionId(data.sessionId);
+
+      return this.prisma.group.upsert({
+        where: {
+          sessionId_jid: {
+            sessionId: sessionInternalId,
+            jid: data.jid
+          }
+        },
+        update: {
+          subject: data.subject,
+          description: data.description,
+          owner: data.owner,
+          participants: data.participants,
+          settings: data.settings,
+          metadata: data.metadata,
+          updatedAt: new Date()
+        },
+        create: {
+          ...data,
+          sessionId: sessionInternalId
+        }
+      });
+    } catch (error) {
+      logger.error({
+        sessionId: data.sessionId,
+        jid: data.jid,
+        error: error instanceof Error ? error.message : String(error)
+      }, 'Failed to upsert group');
       throw error;
     }
   }

@@ -391,32 +391,15 @@ export class WhatsAppService {
   private async handleGroupsUpsert(sessionId: string, groups: any[]) {
     for (const group of groups) {
       try {
-        await this.dbService.client.group.upsert({
-          where: {
-            sessionId_jid: {
-              sessionId,
-              jid: group.id
-            }
-          },
-          update: {
-            subject: group.subject,
-            description: group.desc,
-            owner: group.owner,
-            participants: group.participants,
-            settings: group,
-            metadata: group,
-            updatedAt: new Date()
-          },
-          create: {
-            sessionId,
-            jid: group.id,
-            subject: group.subject,
-            description: group.desc,
-            owner: group.owner,
-            participants: group.participants,
-            settings: group,
-            metadata: group
-          }
+        await this.dbService.upsertGroup({
+          sessionId,
+          jid: group.id,
+          subject: group.subject,
+          description: group.desc,
+          owner: group.owner,
+          participants: group.participants,
+          settings: group,
+          metadata: group
         });
 
         // Emit to websocket clients
@@ -485,6 +468,8 @@ export class WhatsAppService {
     }
     this.sessions.delete(sessionId);
     await this.dbService.deleteSession(sessionId);
+    // Clear session ID cache
+    this.dbService.clearSessionIdCache(sessionId);
   }
 
   async requestPairingCode(sessionId: string, phoneNumber: string): Promise<string> {
