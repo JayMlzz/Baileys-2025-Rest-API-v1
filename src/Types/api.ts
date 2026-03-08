@@ -104,6 +104,22 @@ export interface MessageOptions {
   edit?: string;
 }
 
+/**
+ * BaileysMessageContent - Raw message content from Baileys WhatsApp library
+ * Stores the complete message object as received from Baileys socket
+ * Can contain various message types:
+ * - Text: { conversation: string } or { extendedTextMessage: {...} }
+ * - Image: { imageMessage: { url, mediaKey, caption, ... } }
+ * - Video: { videoMessage: { url, mediaKey, caption, ... } }
+ * - Audio: { audioMessage: { url, mediaKey, seconds, ... } }
+ * - Document: { documentMessage: { url, filename, ... } }
+ * - Location: { locationMessage: { latitude, longitude, ... } }
+ * - Contact: { contactMessage: { displayName, vcard, ... } }
+ * - Poll: { pollCreationMessage: { name, options, ... } }
+ * etc.
+ */
+export type BaileysMessageContent = Record<string, any>;
+
 export enum MessageType {
   TEXT = 'text',
   IMAGE = 'image',

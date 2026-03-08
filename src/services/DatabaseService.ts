@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { logger } from '../Utils/apiLogger';
+import { BaileysMessageContent } from '../Types/api';
 
 export class DatabaseService {
   private prisma: PrismaClient;
@@ -205,7 +206,7 @@ export class DatabaseService {
     fromJid?: string;
     toJid: string;
     messageType: string;
-    content: any;
+    content?: BaileysMessageContent;
     timestamp: Date;
     quotedMessage?: string;
     metadata?: any;
@@ -221,11 +222,38 @@ export class DatabaseService {
         throw new Error(`Session not found: ${data.sessionId}`);
       }
 
-      return this.prisma.message.create({
-        data: {
-          ...data,
-          sessionId: session.id, // Use the internal session ID
-          messageType: data.messageType as any
+      // Ensure content is not undefined (use empty object if not provided)
+      const content = data.content || {};
+
+      // Use upsert to handle duplicate messages gracefully
+      // If message already exists, update it; otherwise create it
+      return this.prisma.message.upsert({
+        where: {
+          sessionId_messageId: {
+            sessionId: session.id,
+            messageId: data.messageId
+          }
+        },
+        update: {
+          // Update these fields if message already exists
+          content: content,
+          status: 'PENDING',
+          metadata: data.metadata,
+          updatedAt: new Date()
+        },
+        create: {
+          // Create new message with all fields
+          messageId: data.messageId,
+          sessionId: session.id,
+          chatId: data.chatId,
+          fromMe: data.fromMe,
+          fromJid: data.fromJid,
+          toJid: data.toJid,
+          messageType: data.messageType as any,
+          content: content,
+          timestamp: data.timestamp,
+          quotedMessage: data.quotedMessage,
+          metadata: data.metadata
         }
       });
     } catch (error) {
@@ -301,6 +329,60 @@ export class DatabaseService {
       throw error;
     }
   }
+
+  async getMessageByMessageId(messageId: string, sessionId: string) {
+  try {
+    const session = await this.prisma.session.findUnique({
+      where: { sessionId },
+      select: { id: true }
+    });
+
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    return this.prisma.message.findFirst({
+      where: {
+        messageId,
+        sessionId: session.id
+      }
+    });
+  } catch (error) {
+    logger.error({
+      sessionId,
+      messageId,
+      error: error instanceof Error ? error.message : String(error)
+    }, 'Failed to get message by ID');
+    throw error;
+  }
+}
+
+async deleteMessage(messageId: string, sessionId: string) {
+  try {
+    const session = await this.prisma.session.findUnique({
+      where: { sessionId },
+      select: { id: true }
+    });
+
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    return this.prisma.message.deleteMany({
+      where: {
+        messageId,
+        sessionId: session.id
+      }
+    });
+  } catch (error) {
+    logger.error({
+      sessionId,
+      messageId,
+      error: error instanceof Error ? error.message : String(error)
+    }, 'Failed to delete message');
+    throw error;
+  }
+}
 
   // Chat operations
   async upsertChat(data: {

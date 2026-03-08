@@ -426,4 +426,250 @@ router.post('/:sessionId/send-reaction', [
   }
 }));
 
+/**
+ * @swagger
+ * /api/messages/{sessionId}/typing:
+ *   post:
+ *     summary: Send typing indicator
+ *     tags: [Messages]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - chatId
+ *               - isTyping
+ *             properties:
+ *               chatId:
+ *                 type: string
+ *               isTyping:
+ *                 type: boolean
+ *                 default: true
+ *     responses:
+ *       200:
+ *         description: Typing indicator sent successfully
+ */
+router.post('/:sessionId/typing', [
+  param('sessionId').notEmpty(),
+  body('chatId').notEmpty().trim(),
+  body('isTyping').optional().isBoolean()
+], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
+  const { sessionId } = req.params;
+  const { chatId, isTyping = true } = req.body;
+
+  try {
+    await whatsAppService.sendTypingIndicator(sessionId, chatId, isTyping);
+
+    res.json({
+      success: true,
+      message: isTyping ? 'Typing indicator started' : 'Typing indicator stopped',
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  }
+}));
+
+/**
+ * @swagger
+ * /api/messages/{sessionId}/mark-read:
+ *   post:
+ *     summary: Mark chat as read
+ *     tags: [Messages]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - chatId
+ *             properties:
+ *               chatId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Chat marked as read
+ */
+router.post('/:sessionId/mark-read', [
+  param('sessionId').notEmpty(),
+  body('chatId').notEmpty().trim()
+], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
+  const { sessionId } = req.params;
+  const { chatId } = req.body;
+
+  try {
+    await whatsAppService.markChatAsRead(sessionId, chatId);
+
+    res.json({
+      success: true,
+      message: 'Chat marked as read',
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  }
+}));
+
+/**
+ * @swagger
+ * /api/messages/{sessionId}/delete:
+ *   post:
+ *     summary: Delete a message
+ *     tags: [Messages]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - chatId
+ *               - messageId
+ *             properties:
+ *               chatId:
+ *                 type: string
+ *               messageId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Message deleted successfully
+ */
+router.post('/:sessionId/delete', [
+  param('sessionId').notEmpty(),
+  body('chatId').notEmpty().trim(),
+  body('messageId').notEmpty().trim()
+], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
+  const { sessionId } = req.params;
+  const { chatId, messageId } = req.body;
+
+  try {
+    // Create message key for deletion
+    const key = {
+      remoteJid: chatId,
+      id: messageId,
+      fromMe: true
+    };
+
+    await whatsAppService.deleteMessage(sessionId, chatId, key);
+    
+    // Also delete from database
+    await dbService.deleteMessage(messageId, sessionId);
+
+    res.json({
+      success: true,
+      message: 'Message deleted successfully',
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  }
+}));
+
+/**
+ * @swagger
+ * /api/messages/{sessionId}/edit:
+ *   post:
+ *     summary: Edit a message
+ *     tags: [Messages]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - chatId
+ *               - messageId
+ *               - newText
+ *             properties:
+ *               chatId:
+ *                 type: string
+ *               messageId:
+ *                 type: string
+ *               newText:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Message edited successfully
+ */
+router.post('/:sessionId/edit', [
+  param('sessionId').notEmpty(),
+  body('chatId').notEmpty().trim(),
+  body('messageId').notEmpty().trim(),
+  body('newText').notEmpty().trim().isLength({ min: 1, max: 4096 })
+], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
+  const { sessionId } = req.params;
+  const { chatId, messageId, newText } = req.body;
+
+  try {
+    // Create message key for editing
+    const key = {
+      remoteJid: chatId,
+      id: messageId,
+      fromMe: true
+    };
+
+    await whatsAppService.editMessage(sessionId, chatId, key, newText);
+
+    res.json({
+      success: true,
+      message: 'Message edited successfully',
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  }
+}));
+
 export default router;

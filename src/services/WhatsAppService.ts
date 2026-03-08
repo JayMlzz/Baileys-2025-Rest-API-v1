@@ -479,6 +479,70 @@ export class WhatsAppService {
     return code;
   }
 
+  // Typing Indicators
+  async sendTypingIndicator(sessionId: string, chatId: string, isTyping: boolean = true) {
+    const session = this.sessions.get(sessionId);
+    if (!session?.socket) {
+      throw new Error('Session not connected');
+    }
+
+    try {
+      await session.socket.sendPresenceUpdate(isTyping ? 'composing' : 'paused', chatId);
+      whatsappLogger.info(`Typing indicator ${isTyping ? 'started' : 'stopped'} for ${sessionId} in ${chatId}`);
+    } catch (error) {
+      whatsappLogger.error(`Failed to send typing indicator for ${sessionId}:`, error);
+      throw error;
+    }
+  }
+
+  // Mark chat as read
+  async markChatAsRead(sessionId: string, chatId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session?.socket) {
+      throw new Error('Session not connected');
+    }
+
+    try {
+      await session.socket.chatModify({ markRead: true, lastMessages: [] }, chatId);
+      whatsappLogger.info(`Chat ${chatId} marked as read for ${sessionId}`);
+    } catch (error) {
+      whatsappLogger.error(`Failed to mark chat as read for ${sessionId}:`, error);
+      throw error;
+    }
+  }
+
+  // Delete message
+  async deleteMessage(sessionId: string, chatId: string, messageKey: any) {
+    const session = this.sessions.get(sessionId);
+    if (!session?.socket) {
+      throw new Error('Session not connected');
+    }
+
+    try {
+      await session.socket.sendMessage(chatId, { delete: messageKey });
+      whatsappLogger.info(`Message deleted in ${chatId} for ${sessionId}`);
+    } catch (error) {
+      whatsappLogger.error(`Failed to delete message for ${sessionId}:`, error);
+      throw error;
+    }
+  }
+
+  // Edit message
+  async editMessage(sessionId: string, chatId: string, messageKey: any, newText: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session?.socket) {
+      throw new Error('Session not connected');
+    }
+
+    try {
+      await session.socket.sendMessage(chatId, { edit: messageKey, text: newText });
+      whatsappLogger.info(`Message edited in ${chatId} for ${sessionId}`);
+    } catch (error) {
+      whatsappLogger.error(`Failed to edit message for ${sessionId}:`, error);
+      throw error;
+    }
+  }
+
   async sendMessage(sessionId: string, to: string, content: AnyMessageContent): Promise<any> {
     const session = this.sessions.get(sessionId);
     if (!session?.socket) {
