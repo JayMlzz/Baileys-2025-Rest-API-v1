@@ -788,7 +788,28 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			await Promise.all([
 				processingMutex.mutex(
 					async() => {
-						await decrypt()
+						// Wrap decrypt in try-catch to handle group messages with @lid addresses
+						try {
+							await decrypt()
+						} catch (decryptError: any) {
+							const errorMsg = decryptError?.message || String(decryptError)
+							// Check if this is a @lid group decryption error (missing session keys)
+							if ((errorMsg.includes('SenderKeyRecord') || 
+								 errorMsg.includes('No session found') ||
+								 errorMsg.includes('No matching sessions')) && 
+								node.attrs.participant?.endsWith('@lid')) {
+								logger.warn(
+									{ participant: node.attrs.participant, group: node.attrs.from },
+									'Failed to decrypt group message from @lid participant, marking as ciphertext'
+								)
+								// Mark as ciphertext so it will be retried rather than crashing
+								msg.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
+								msg.messageStubParameters = [MISSING_KEYS_ERROR_TEXT]
+							} else {
+								// Not an @lid issue, re-throw
+								throw decryptError
+							}
+						}
 						// message failed to decrypt
 						if(msg.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT) {
 						  if(msg?.messageStubParameters?.[0] === MISSING_KEYS_ERROR_TEXT) {

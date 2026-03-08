@@ -100,6 +100,9 @@ export class WhatsAppService {
         getMessage: async (key) => {
           // Implement message retrieval from database
           return undefined;
+          // return {
+          //   conversation: 'Pesan terenkripsi'
+          // };
         }
       });
 
@@ -237,6 +240,24 @@ export class WhatsAppService {
 
     for (const message of messages) {
       try {
+        // Skip messages that failed to decrypt (message is empty)
+        if (!message.message) {
+          whatsappLogger.warn(`Skipping undecryptable message ${message.key.id} from ${message.key.remoteJid}`);
+          
+          // For group messages, request sender keys
+          if (message.key.remoteJid?.endsWith('@g.us')) {
+            try {
+              const session = this.sessions.get(sessionId);
+              if (session?.socket) {
+                await session.socket.resyncAppState(['critical_block'], false);
+              }
+            } catch (error) {
+              whatsappLogger.debug('Could not request app state resync:', error);
+            }
+          }
+          continue;
+        }
+
         // Save message to database
         await this.dbService.saveMessage({
           messageId: message.key.id!,
@@ -268,7 +289,13 @@ export class WhatsAppService {
         });
 
       } catch (error) {
-        whatsappLogger.error(`Failed to handle message for ${sessionId}:`, error);
+        // Log error but don't throw - continue processing other messages
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        
+        // Only log critical errors, skip decryption errors
+        if (!errorMsg.includes('decryption') && !errorMsg.includes('SenderKeyRecord')) {
+          whatsappLogger.error(`Failed to handle message for ${sessionId}:`, error);
+        }
       }
     }
   }
