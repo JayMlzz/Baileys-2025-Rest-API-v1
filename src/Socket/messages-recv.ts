@@ -788,26 +788,89 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			await Promise.all([
 				processingMutex.mutex(
 					async() => {
-						// Wrap decrypt in try-catch to handle group messages with @lid addresses
+						// Wrap decrypt in try-catch to handle encryption key errors gracefully
 						try {
 							await decrypt()
 						} catch (decryptError: any) {
 							const errorMsg = decryptError?.message || String(decryptError)
-							// Check if this is a @lid group decryption error (missing session keys)
-							if ((errorMsg.includes('SenderKeyRecord') || 
-								 errorMsg.includes('No session found') ||
-								 errorMsg.includes('No matching sessions')) && 
-								node.attrs.participant?.endsWith('@lid')) {
+							const errorName = decryptError?.name || 'UnknownError'
+							const participant = node.attrs.participant || node.attrs.from
+							
+							// Handle PreKeyError - Invalid PreKeys from sender happen when key rotation occurs
+							// or PreKey storage is out of sync. Request resync instead of crashing.
+							if (errorName === 'PreKeyError' || errorMsg.includes('Invalid PreKey')) {
 								logger.warn(
-									{ participant: node.attrs.participant, group: node.attrs.from },
-									'Failed to decrypt group message from @lid participant, marking as ciphertext'
+									{ participant, remoteJid: node.attrs.from, error: errorMsg },
+									'Failed to decrypt message due to invalid PreKey from sender, requesting key resync'
 								)
-								// Mark as ciphertext so it will be retried rather than crashing
 								msg.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
 								msg.messageStubParameters = [MISSING_KEYS_ERROR_TEXT]
-							} else {
-								// Not an @lid issue, re-throw
-								throw decryptError
+								// Request sender key resync
+								try {
+									await resyncAppState(['regular'], false)
+								} catch (resyncErr) {
+									logger.debug('Could not request app state resync:', resyncErr)
+								}
+							}
+							// Handle SessionError/SenderKeyError - Missing session keys for participant
+							// Common for new group members or after app reinstall
+							else if ((errorName === 'SessionError' || errorName === 'SenderKeyError' ||
+									  errorMsg.includes('No matching sessions') || 
+									  errorMsg.includes('No session found') ||
+									  errorMsg.includes('SenderKeyRecord')) && 
+									 participant?.endsWith('@lid')) {
+								logger.warn(
+									{ participant, remoteJid: node.attrs.from },
+									'Failed to decrypt group message from @lid participant (missing session keys), requesting resync'
+								)
+								msg.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
+								msg.messageStubParameters = [MISSING_KEYS_ERROR_TEXT]
+								// Request sender keys for @lid
+								try {
+									await resyncAppState(['critical_block'], false)
+								} catch (resyncErr) {
+									logger.debug('Could not request app state resync:', resyncErr)
+								}
+							}
+							// Handle SessionError for regular addresses - same approach
+							else if ((errorName === 'SessionError' || errorMsg.includes('No matching sessions')) && 
+									 !participant?.endsWith('@lid')) {
+								logger.warn(
+									{ participant, remoteJid: node.attrs.from },
+									'Failed to decrypt message due to missing session keys, requesting resync'
+								)
+								msg.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
+								msg.messageStubParameters = [MISSING_KEYS_ERROR_TEXT]
+								// Request general resync
+								try {
+									await resyncAppState(['regular'], false)
+								} catch (resyncErr) {
+									logger.debug('Could not request app state resync:', resyncErr)
+								}
+							}
+							// Handle other decryption errors
+							else if (errorName === 'SessionError' || errorMsg.includes('decrypt')) {
+								logger.warn(
+									{ participant, error: errorMsg, errorName },
+									'Failed to decrypt message, marking as ciphertext'
+								)
+								msg.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
+								msg.messageStubParameters = [MISSING_KEYS_ERROR_TEXT]
+							}
+							// Unexpected error - mark as ciphertext and request resync instead of crashing
+							else {
+								logger.warn(
+									{ participant, error: errorMsg, errorName },
+									'Unexpected decryption error, marking as ciphertext and requesting resync'
+								)
+								msg.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
+								msg.messageStubParameters = [MISSING_KEYS_ERROR_TEXT]
+								// Request resync for any unexpected decryption error
+								try {
+									await resyncAppState(['regular', 'critical_block'], false)
+								} catch (resyncErr) {
+									logger.debug('Could not request app state resync:', resyncErr)
+								}
 							}
 						}
 						// message failed to decrypt
