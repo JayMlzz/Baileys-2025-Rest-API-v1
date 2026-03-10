@@ -238,6 +238,18 @@ export class DatabaseService {
     });
   }
 
+  async deleteSessionPermanently(sessionId: string) {
+    // Hard delete - removes record completely (used for restart scenario)
+    return this.prisma.session.delete({
+      where: { sessionId }
+    }).catch((error) => {
+      // Ignore error if session doesn't exist
+      if (error.code !== 'P2025') {
+        throw error;
+      }
+    });
+  }
+
   // Message operations
   async saveMessage(data: {
     messageId: string;

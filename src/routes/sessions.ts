@@ -5,6 +5,7 @@ import { sessionMiddleware } from '../middleware/auth';
 import { whatsAppService } from '../app';
 import { DatabaseService } from '../services/DatabaseService';
 import { SyncService } from '../services/SyncService';
+import { logger } from '../Utils/apiLogger';
 import { ApiResponse, SessionStatus } from '../Types/api';
 import { isValidSessionId, isValidPhoneNumber } from '../Utils/validation';
 
@@ -279,6 +280,56 @@ router.get('/:sessionId/qr', [
 
 /**
  * @swagger
+ * /api/sessions/{sessionId}/refresh-qr:
+ *   post:
+ *     summary: Refresh QR code (after logout from phone)
+ *     description: Request a new QR code for re-authentication (useful after user logs out from phone)
+ *     tags: [Sessions]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: QR code refresh initiated
+ *       404:
+ *         description: Session not found
+ */
+router.post('/:sessionId/refresh-qr', [
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  })
+], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
+  const { sessionId } = req.params;
+
+  const session = await whatsAppService.getSession(sessionId);
+  if (!session) {
+    return res.status(404).json({
+      success: false,
+      error: 'Session not found',
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  }
+
+  // Re-initialize connection to get new QR code
+  await whatsAppService.refreshSessionQR(sessionId);
+
+  res.json({
+    success: true,
+    message: 'QR code refresh initiated. Check /qr endpoint for new QR code',
+    sessionId,
+    timestamp: new Date().toISOString()
+  } as ApiResponse);
+}));
+
+
+/**
+ * @swagger
  * /api/sessions/{sessionId}/pairing-code:
  *   post:
  *     summary: Request pairing code for session
@@ -410,8 +461,19 @@ router.post('/:sessionId/restart', [
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
 
-  // Delete and recreate session
+  // For restart scenario: permanently delete old session then create new one
+  // This is intentional - only used when user explicitly requests restart
+  try {
+    await dbService.deleteSessionPermanently(sessionId);
+    logger.info(`Permanently deleted session during restart: ${sessionId}`);
+  } catch (error) {
+    logger.warn(`Could not delete old session (may not exist): ${sessionId}`, error);
+  }
+
+  // Delete from memory as well
   await whatsAppService.deleteSession(sessionId);
+
+  // Create fresh session
   const newSession = await whatsAppService.createSession(sessionId, req.user!.id);
 
   res.json({

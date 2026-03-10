@@ -85,17 +85,44 @@ export class WhatsAppService {
 
   private async initializeWhatsAppConnection(sessionId: string, usePairingCode = false) {
     try {
+      logger.debug(`Initializing WhatsApp connection for session: ${sessionId}`);
+      
       const authDir = join(process.cwd(), 'auth_sessions', sessionId);
+      
+      // Ensure auth directory exists before initializing auth state
+      if (!existsSync(authDir)) {
+        mkdirSync(authDir, { recursive: true });
+        logger.debug(`Created auth directory for session: ${sessionId}`);
+      }
+      
+      logger.debug(`Loading auth state from: ${authDir}`);
       const { state, saveCreds } = await useMultiFileAuthState(authDir);
-      const { version } = await fetchLatestBaileysVersion();
+      logger.debug(`Auth state loaded successfully for session: ${sessionId}`);
+      
+      logger.debug(`Fetching latest Baileys version`);
+      let version;
+      try {
+        const versionData = await fetchLatestBaileysVersion();
+        version = versionData;
+        logger.debug(`Baileys version fetched: ${version.version}`);
+      } catch (versionError) {
+        logger.warn(`Failed to fetch latest Baileys version, using fallback:`, versionError);
+        // Fallback to a reasonable default version
+        version = {
+          version: '6.0.0',
+          isLatest: false
+        };
+        logger.debug(`Using fallback Baileys version: ${version.version}`);
+      }
 
+      // Use regular WhatsApp logger (don't filter - let Baileys handle all logs)
       const socket = makeWASocket({
         version,
-        logger: whatsappLogger,
+        logger: whatsappLogger as any,
         printQRInTerminal: false,
         auth: {
           creds: state.creds,
-          keys: makeCacheableSignalKeyStore(state.keys, whatsappLogger)
+          keys: makeCacheableSignalKeyStore(state.keys, whatsappLogger as any)
         },
         generateHighQualityLinkPreview: true,
         getMessage: async (key) => {
@@ -106,8 +133,6 @@ export class WhatsAppService {
           // };
         }
       });
-
-      // ADD 8-Maret-2026, FIX 1: Gunakan Map (.has dan .set) agar memori sesi tidak bocor
       if (!this.sessions.has(sessionId)) {
         this.sessions.set(sessionId, {} as WhatsAppSession);
       }
@@ -156,7 +181,19 @@ export class WhatsAppService {
       }
 
     } catch (error) {
-      whatsappLogger.error(`Failed to initialize WhatsApp connection for ${sessionId}:`, error);
+      // Use unfiltered logger for actual errors (not expected decryption issues)
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : '';
+      whatsappLogger.error(
+        `Failed to initialize WhatsApp connection for ${sessionId}: ${errorMsg}\n${errorStack}`,
+        error
+      );
+      logger.error({
+        sessionId,
+        error: errorMsg,
+        stack: errorStack
+      }, 'WhatsApp connection initialization failed');
+      
       const session = this.sessions.get(sessionId);
       if (session) {
         session.status = SessionStatus.ERROR;
@@ -205,10 +242,33 @@ export class WhatsAppService {
           this.initializeWhatsAppConnection(sessionId);
         }, 5000);
       } else {
-        whatsappLogger.info(`Session ${sessionId} logged out`);
+        // User logged out from phone - require re-authentication with new QR code
+        whatsappLogger.info(`Session ${sessionId} logged out from phone, re-initializing for re-authentication`);
+        
+        // Clear the socket and session state
+        if (session.socket) {
+          session.socket.end(undefined);
+          session.socket = null;
+        }
+        session.qrCode = undefined;
+        session.pairingCode = undefined;
+        
+        // Reset to DISCONNECTED first
         session.status = SessionStatus.DISCONNECTED;
-        await this.updateSessionInDatabase(sessionId, { status: 'DISCONNECTED' });
+        await this.updateSessionInDatabase(sessionId, { 
+          status: 'DISCONNECTED',
+          qrCode: null,
+          pairingCode: null
+        });
         this.emitSessionUpdate(sessionId);
+
+        // Re-initialize connection to show new QR code for re-login
+        setTimeout(() => {
+          whatsappLogger.info(`Re-initializing connection for ${sessionId} to show new QR code`);
+          this.initializeWhatsAppConnection(sessionId).catch(error => {
+            whatsappLogger.error(`Failed to re-initialize connection after logout for ${sessionId}:`, error);
+          });
+        }, 2000);
       }
     } else if (connection === 'open') {
       whatsappLogger.info(`Session ${sessionId} connected`);
@@ -521,6 +581,49 @@ export class WhatsAppService {
     await this.dbService.deleteSession(sessionId);
     // Clear session ID cache
     this.dbService.clearSessionIdCache(sessionId);
+  }
+
+  async refreshSessionQR(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    // Close existing socket if any
+    if (session.socket) {
+      try {
+        session.socket.end(undefined);
+      } catch (error) {
+        whatsappLogger.debug(`Error closing socket during QR refresh for ${sessionId}:`, error);
+      }
+    }
+
+    // Clear session state (but keep session in memory)
+    session.socket = null;
+    session.qrCode = undefined;
+    session.pairingCode = undefined;
+    session.status = SessionStatus.CONNECTING;
+
+    // Update database
+    await this.updateSessionInDatabase(sessionId, {
+      status: 'CONNECTING',
+      qrCode: null,
+      pairingCode: null
+    });
+
+    this.emitSessionUpdate(sessionId);
+
+    // Re-initialize connection to generate fresh QR code
+    logger.info(`Refreshing QR code for session ${sessionId}`);
+    try {
+      await this.initializeWhatsAppConnection(sessionId);
+    } catch (error) {
+      whatsappLogger.error(`Failed to refresh QR for ${sessionId}:`, error);
+      session.status = SessionStatus.ERROR;
+      await this.updateSessionInDatabase(sessionId, { status: 'ERROR' });
+      this.emitSessionUpdate(sessionId);
+      throw error;
+    }
   }
 
   async requestPairingCode(sessionId: string, phoneNumber: string): Promise<string> {
