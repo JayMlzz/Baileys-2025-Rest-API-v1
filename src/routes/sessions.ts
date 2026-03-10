@@ -4,6 +4,7 @@ import { handleValidationErrors, asyncHandler } from '../middleware/errorHandler
 import { sessionMiddleware } from '../middleware/auth';
 import { whatsAppService } from '../app';
 import { DatabaseService } from '../services/DatabaseService';
+import { SyncService } from '../services/SyncService';
 import { ApiResponse, SessionStatus } from '../Types/api';
 import { isValidSessionId, isValidPhoneNumber } from '../Utils/validation';
 
@@ -420,5 +421,150 @@ router.post('/:sessionId/restart', [
     timestamp: new Date().toISOString()
   } as ApiResponse);
 }));
+
+/**
+ * @swagger
+ * /api/sessions/{sessionId}/sync:
+ *   post:
+ *     summary: Trigger comprehensive app state and message history sync
+ *     description: Manually trigger full sync for a session (chat list, contacts, groups, message history)
+ *     tags: [Sessions]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Session ID
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               type:
+ *                 type: string
+ *                 enum: ['full', 'quick']
+ *                 default: 'full'
+ *                 description: Type of sync (full includes message history)
+ *     responses:
+ *       200:
+ *         description: Sync initiated successfully
+ */
+router.post('/:sessionId/sync',
+  param('sessionId').custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  handleValidationErrors,
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+    const { type = 'full' } = req.body;
+
+    // Verify session exists and is connected
+    const session = await whatsAppService.getSession(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found',
+        timestamp: new Date().toISOString()
+      } as ApiResponse);
+    }
+
+    if (!session.socket) {
+      return res.status(409).json({
+        success: false,
+        error: 'Session is not connected',
+        timestamp: new Date().toISOString()
+      } as ApiResponse);
+    }
+
+    // Trigger sync based on type
+    let syncResult;
+    if (type === 'quick') {
+      syncResult = await SyncService.quickSync(session.socket, sessionId);
+    } else {
+      syncResult = await SyncService.fullySync(session.socket, sessionId);
+    }
+
+    res.json({
+      success: syncResult.success,
+      data: {
+        sessionId: syncResult.sessionId,
+        syncType: type,
+        startTime: syncResult.startTime,
+        endTime: syncResult.endTime,
+        duration: syncResult.endTime 
+          ? `${(syncResult.endTime.getTime() - syncResult.startTime.getTime()) / 1000}s`
+          : null,
+        steps: syncResult.steps.map(step => ({
+          collection: step.collection,
+          status: step.status,
+          message: step.message,
+          error: step.error,
+          retryCount: step.retryCount
+        }))
+      },
+      message: syncResult.success 
+        ? `${type} sync completed successfully`
+        : `${type} sync completed with errors`,
+      error: syncResult.error,
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  })
+);
+
+/**
+ * @swagger
+ * /api/sessions/{sessionId}/sync/status:
+ *   get:
+ *     summary: Get last sync status
+ *     tags: [Sessions]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Sync status retrieved
+ */
+router.get('/:sessionId/sync/status',
+  param('sessionId').custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  }),
+  handleValidationErrors,
+  asyncHandler(async (req, res) => {
+    const { sessionId } = req.params;
+
+    const session = await whatsAppService.getSession(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found',
+        timestamp: new Date().toISOString()
+      } as ApiResponse);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        sessionId,
+        isConnected: !!session.socket,
+        lastSeen: session.lastSeen,
+        status: session.status
+      },
+      message: 'Sync status retrieved. Full sync automatically starts on connection.',
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  })
+);
 
 export default router;

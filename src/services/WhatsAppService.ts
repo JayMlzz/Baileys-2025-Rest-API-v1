@@ -16,6 +16,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { logger, whatsappLogger } from '../Utils/apiLogger';
 import { DatabaseService } from './DatabaseService';
 import { WebhookService } from './WebhookService';
+import { SyncService } from './SyncService';
 import { WhatsAppSession, SessionStatus } from '../Types/api';
 
 export class WhatsAppService {
@@ -232,6 +233,12 @@ export class WhatsAppService {
       });
       
       this.emitSessionUpdate(sessionId);
+
+      // Start comprehensive sync in background (non-blocking)
+      // This ensures bot has latest chats, contacts, groups, and message history
+      this.startBackgroundSync(sessionId, session.socket!).catch(error => {
+        whatsappLogger.error(`Background sync failed for session ${sessionId}:`, error);
+      });
     }
   }
 
@@ -434,6 +441,50 @@ export class WhatsAppService {
       await this.dbService.updateSession(sessionId, data);
     } catch (error) {
       whatsappLogger.error(`Failed to update session ${sessionId} in database:`, error);
+    }
+  }
+
+  /**
+   * Start comprehensive background sync when connection is established
+   * Follows recommended order:
+   * 1. critical_block (highest priority)
+   * 2. regular (chats, contacts)
+   * 3. addonsv2 (additional data)
+   * 4. message history
+   */
+  private async startBackgroundSync(sessionId: string, socket: WASocket): Promise<void> {
+    try {
+      whatsappLogger.info(`[Sync] Initiating comprehensive sync for session ${sessionId}`);
+      
+      const syncResult = await SyncService.fullySync(socket, sessionId, {
+        skipHistory: false  // Include message history
+      });
+
+      if (syncResult.success) {
+        whatsappLogger.info(`[Sync] ✓ Comprehensive sync completed for session ${sessionId}`, {
+          duration: syncResult.endTime 
+            ? `${(syncResult.endTime.getTime() - syncResult.startTime.getTime()) / 1000}s`
+            : 'N/A',
+          steps: syncResult.steps.map(s => ({
+            collection: s.collection,
+            status: s.status,
+            message: s.message
+          }))
+        });
+
+        // Emit sync completion event
+        this.io.emit('syncCompleted', {
+          sessionId,
+          timestamp: new Date()
+        });
+      } else {
+        whatsappLogger.warn(`[Sync] ⚠ Comprehensive sync partially failed for session ${sessionId}`, {
+          error: syncResult.error,
+          steps: syncResult.steps.map(s => s.status)
+        });
+      }
+    } catch (error) {
+      whatsappLogger.error(`[Sync] Background sync error for session ${sessionId}:`, error);
     }
   }
 
