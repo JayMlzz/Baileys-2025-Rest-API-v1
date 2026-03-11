@@ -232,10 +232,19 @@ export class DatabaseService {
   }
 
   async deleteSession(sessionId: string) {
-    return this.prisma.session.update({
-      where: { sessionId },
-      data: { isActive: false }
-    });
+    try {
+      return await this.prisma.session.update({
+        where: { sessionId },
+        data: { isActive: false }
+      });
+    } catch (error: any) {
+      // If record doesn't exist (P2025), silently ignore - session may have been hard deleted
+      if (error.code === 'P2025') {
+        logger.debug(`Session ${sessionId} already deleted from database, skipping soft delete`);
+        return;
+      }
+      throw error;
+    }
   }
 
   async deleteSessionPermanently(sessionId: string) {
@@ -574,6 +583,24 @@ async deleteMessage(messageId: string, sessionId: string) {
         jid: data.jid,
         error: error instanceof Error ? error.message : String(error)
       }, 'Failed to upsert group');
+      throw error;
+    }
+  }
+
+  async getGroups(sessionId: string) {
+    try {
+      // Resolve sessionId string to session's internal ID (with caching)
+      const sessionInternalId = await this.resolveSessionId(sessionId);
+
+      return this.prisma.group.findMany({
+        where: { sessionId: sessionInternalId },
+        orderBy: { subject: 'asc' }
+      });
+    } catch (error) {
+      logger.error({
+        sessionId,
+        error: error instanceof Error ? error.message : String(error)
+      }, 'Failed to get groups');
       throw error;
     }
   }

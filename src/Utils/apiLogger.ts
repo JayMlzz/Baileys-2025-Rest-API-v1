@@ -73,7 +73,10 @@ export const createLogger = (component: string) => {
 
 // Specific loggers for different parts of the application
 export const apiLogger = createLogger('api');
-export const whatsappLogger = createLogger('whatsapp');
+
+// Raw whatsapp logger - will be wrapped with filter below
+const rawWhatsappLogger = createLogger('whatsapp');
+
 export const dbLogger = createLogger('database');
 export const webhookLogger = createLogger('webhook');
 
@@ -116,69 +119,73 @@ export const logWebhookDelivery = (webhookId: string, url: string, event: string
   }, 'Webhook Delivery');
 };
 
+// Suppressed errors list
+const SUPPRESSED_ERRORS = [
+  'Invalid PreKey ID',
+  'No session record',
+  'No SenderKeyRecord found',
+  'No matching sessions',
+  'No session found'
+];
+
+const shouldSuppress = (error: any): boolean => {
+  if (!error) return false;
+  const errorMsg = error?.message || error?.toString?.() || '';
+  return SUPPRESSED_ERRORS.some(msg => errorMsg.includes(msg));
+};
+
 /**
  * Create a filtered WhatsApp logger that suppresses known decryption errors
  * These errors are already handled gracefully in our code, so we don't need
  * to log them to error.log and clutter the logs
  */
-export const createFilteredWhatsAppLogger = (): any => {
-  const suppressedErrors = [
-    'Invalid PreKey ID',
-    'No session record',
-    'No SenderKeyRecord found',
-    'No matching sessions',
-    'No session found'
-  ];
-  
-  const shouldSuppress = (error: any): boolean => {
-    if (!error) return false;
-    const errorMsg = error?.message || error?.toString?.() || '';
-    return suppressedErrors.some(msg => errorMsg.includes(msg));
-  };
-  
-  // Create a class that properly implements ILogger interface
-  class FilteredLogger {
-    baseLogger: any;
-    
-    constructor(baseLogger: any) {
-      this.baseLogger = baseLogger;
-    }
-    
-    get level(): string {
-      return this.baseLogger.level;
-    }
-    
-    child(obj: Record<string, unknown>): any {
-      const childLogger = this.baseLogger.child(obj);
-      return new FilteredLogger(childLogger);
-    }
-    
-    trace(obj: unknown, msg?: string) {
-      return this.baseLogger.trace(obj, msg);
-    }
-    
-    debug(obj: unknown, msg?: string) {
-      return this.baseLogger.debug(obj, msg);
-    }
-    
-    info(obj: unknown, msg?: string) {
-      return this.baseLogger.info(obj, msg);
-    }
-    
-    warn(obj: unknown, msg?: string) {
-      return this.baseLogger.warn(obj, msg);
-    }
-    
-    error(obj: unknown, msg?: string) {
-      // Suppress known decryption errors that we handle gracefully
-      if (shouldSuppress(obj)) {
-        return;
-      }
-      return this.baseLogger.error(obj, msg);
-    }
+class FilteredLogger {
+  baseLogger: any;
+
+  constructor(baseLogger: any) {
+    this.baseLogger = baseLogger;
   }
-  
-  return new FilteredLogger(whatsappLogger);
+
+  get level(): string {
+    return this.baseLogger.level;
+  }
+
+  child(obj: Record<string, unknown>): any {
+    const childLogger = this.baseLogger.child(obj);
+    return new FilteredLogger(childLogger);
+  }
+
+  trace(...args: any[]): void {
+    this.baseLogger.trace(...args);
+  }
+
+  debug(...args: any[]): void {
+    this.baseLogger.debug(...args);
+  }
+
+  info(...args: any[]): void {
+    this.baseLogger.info(...args);
+  }
+
+  warn(...args: any[]): void {
+    this.baseLogger.warn(...args);
+  }
+
+  error(...args: any[]): void {
+    // Suppress known decryption errors that we handle gracefully
+    // args[0] is typically the object or message
+    if (shouldSuppress(args[0])) {
+      return;
+    }
+    this.baseLogger.error(...args);
+  }
+}
+
+// Create the filtered WhatsApp logger
+export const whatsappLogger = new FilteredLogger(rawWhatsappLogger);
+
+export const createFilteredWhatsAppLogger = (): any => {
+  return whatsappLogger;
 };
 
 export default logger;

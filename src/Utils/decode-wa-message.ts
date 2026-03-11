@@ -188,8 +188,10 @@ export const decryptMessageNode = (
 									item: msg.senderKeyDistributionMessage
 								})
 							} catch(err) {
-								logger.error({ key: fullMessage.key, err }, 'failed to decrypt message')
-						        }
+								logger.warn({ key: fullMessage.key, err }, 'failed to decrypt message'),
+								fullMessage.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT,
+								fullMessage.messageStubParameters = [err instanceof Error ? err.message : String(err)]
+							}
 						}
 
 						if(fullMessage.message) {
@@ -198,9 +200,9 @@ export const decryptMessageNode = (
 							fullMessage.message = msg
 						}
 					} catch(err) {
-						logger.error(
+						logger.warn(
 							{ key: fullMessage.key, err },
-							'failed to decrypt message'
+							'failed to decrypt message - marking as ciphertext'
 						)
 						fullMessage.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
 						fullMessage.messageStubParameters = [err.message]

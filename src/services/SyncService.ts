@@ -1,5 +1,6 @@
 import { WASocket } from '../index';
 import { logger } from '../Utils/apiLogger';
+import { DatabaseService } from './DatabaseService';
 
 export class SyncService {
   /**
@@ -68,6 +69,12 @@ export class SyncService {
           await this.fetchMessageHistory(socket, sessionId)
         );
       }
+
+      // Step 6: CRITICAL - Fetch and save all groups, chats, contacts to database
+      // This ensures database has all groups even if event listeners didn't fire
+      result.steps.push(
+        await this.fetchAndSaveAllGroupsChatsContacts(socket, sessionId)
+      );
 
       // Determine overall success: at least critical_block and regular_high must succeed
       const criticalBlockStatus = result.steps.find(s => s.collection === 'critical_block')?.status;
@@ -252,6 +259,135 @@ export class SyncService {
 
       logger.error(`[SyncService] Quick sync failed for session ${sessionId}:`, error);
       return result;
+    }
+  }
+
+  /**
+   * Fetch and save all groups, chats, and contacts to database
+   * This is critical to ensure database has all data, not relying on event listeners
+   * Runs after app state sync to catch any missed data
+   */
+  private static async fetchAndSaveAllGroupsChatsContacts(
+    socket: WASocket,
+    sessionId: string
+  ): Promise<SyncStep> {
+    const step: SyncStep = {
+      collection: 'groups_chats_contacts_sync',
+      status: 'pending',
+      message: '',
+      error: null,
+      retryCount: 0
+    };
+
+    try {
+      const dbService = new DatabaseService();
+      let groupsCount = 0;
+      let chatsCount = 0;
+      let contactsCount = 0;
+
+      logger.info(`[SyncService] Fetching and saving all groups, chats, and contacts for session ${sessionId}`);
+
+      // Fetch all groups
+      try {
+        const allGroups = await (socket as any).groupFetchAll?.();
+        
+        if (allGroups && Array.isArray(allGroups)) {
+          for (const groupId of allGroups) {
+            try {
+              const groupMetadata = await socket.groupMetadata(groupId);
+              
+              await dbService.upsertGroup({
+                sessionId,
+                jid: groupMetadata.id,
+                subject: groupMetadata.subject,
+                description: groupMetadata.desc,
+                owner: groupMetadata.owner,
+                participants: groupMetadata.participants,
+                settings: groupMetadata,
+                metadata: groupMetadata
+              });
+              
+              groupsCount++;
+            } catch (error) {
+              logger.debug(`Failed to fetch/save group ${groupId}:`, error);
+            }
+          }
+        }
+      } catch (error) {
+        logger.warn(`[SyncService] Could not fetch all groups for session ${sessionId}:`, error);
+      }
+
+      // Fetch all chats
+      try {
+        const allChats = (await (socket as any).store?.chats?.getAll?.()) || [];
+        
+        for (const chat of allChats) {
+          try {
+            await dbService.upsertChat({
+              sessionId,
+              jid: chat.id,
+              name: chat.name,
+              isGroup: chat.id.endsWith('@g.us'),
+              isArchived: chat.archived || false,
+              isPinned: chat.pinned || false,
+              isMuted: chat.mute || false,
+              unreadCount: chat.unreadCount || 0,
+              lastMessage: chat.lastMessage,
+              metadata: chat
+            });
+            
+            chatsCount++;
+          } catch (error) {
+            logger.debug(`Failed to save chat ${chat.id}:`, error);
+          }
+        }
+      } catch (error) {
+        logger.warn(`[SyncService] Could not fetch all chats for session ${sessionId}:`, error);
+      }
+
+      // Fetch all contacts
+      try {
+        const allContacts = (await (socket as any).store?.contacts?.getAll?.()) || [];
+        
+        for (const contact of allContacts) {
+          try {
+            await dbService.upsertContact({
+              sessionId,
+              jid: contact.id,
+              name: contact.name,
+              pushName: contact.notify,
+              profilePicUrl: contact.imgUrl,
+              isBlocked: contact.blocked || false,
+              metadata: contact
+            });
+            
+            contactsCount++;
+          } catch (error) {
+            logger.debug(`Failed to save contact ${contact.id}:`, error);
+          }
+        }
+      } catch (error) {
+        logger.warn(`[SyncService] Could not fetch all contacts for session ${sessionId}:`, error);
+      }
+
+      step.status = 'success';
+      step.message = `Synced ${groupsCount} groups, ${chatsCount} chats, ${contactsCount} contacts`;
+      
+      logger.info(`[SyncService] ✓ Groups/Chats/Contacts sync completed for session ${sessionId}`, {
+        groups: groupsCount,
+        chats: chatsCount,
+        contacts: contactsCount
+      });
+
+      return step;
+    } catch (error) {
+      step.status = 'failed';
+      step.error = error instanceof Error ? error.message : String(error);
+      logger.error(
+        `[SyncService] ✗ Groups/Chats/Contacts sync failed for session ${sessionId}`,
+        { error: step.error }
+      );
+      return step;
     }
   }
 }

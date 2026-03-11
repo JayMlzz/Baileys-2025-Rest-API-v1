@@ -461,24 +461,40 @@ router.post('/:sessionId/restart', [
 ], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
   const { sessionId } = req.params;
 
-  // For restart scenario: permanently delete old session then create new one
-  // This is intentional - only used when user explicitly requests restart
+  // Simplified restart: clean up and reinitialize
+  logger.info(`Restarting session: ${sessionId}`);
+
+  // Step 1: Close socket and clear memory
   try {
-    await dbService.deleteSessionPermanently(sessionId);
-    logger.info(`Permanently deleted session during restart: ${sessionId}`);
+    await whatsAppService.deleteSession(sessionId);
   } catch (error) {
-    logger.warn(`Could not delete old session (may not exist): ${sessionId}`, error);
+    logger.warn(`Error cleaning up session memory: ${sessionId}`, error);
   }
 
-  // Delete from memory as well
-  await whatsAppService.deleteSession(sessionId);
+  // Step 2: Permanently delete from database to allow fresh creation
+  try {
+    await dbService.deleteSessionPermanently(sessionId);
+  } catch (error) {
+    logger.warn(`Error deleting session from database: ${sessionId}`, error);
+  }
 
-  // Create fresh session
-  const newSession = await whatsAppService.createSession(sessionId, req.user!.id);
+  // Step 3: Create fresh session
+  await whatsAppService.createSession(sessionId, req.user!.id);
 
+  // Get session with only serializable data
+  const liveSession = await whatsAppService.getSession(sessionId);
+  
   res.json({
     success: true,
-    data: newSession,
+    data: {
+      id: liveSession?.id,
+      status: liveSession?.status,
+      qrCode: liveSession?.qrCode,
+      pairingCode: liveSession?.pairingCode,
+      phoneNumber: liveSession?.phoneNumber,
+      name: liveSession?.name,
+      lastSeen: liveSession?.lastSeen
+    },
     message: 'Session restart initiated',
     timestamp: new Date().toISOString()
   } as ApiResponse);

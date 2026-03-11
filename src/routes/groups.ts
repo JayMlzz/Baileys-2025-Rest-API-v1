@@ -3,10 +3,86 @@ import { param, body } from 'express-validator';
 import { handleValidationErrors, asyncHandler } from '../middleware/errorHandler';
 import { sessionMiddleware } from '../middleware/auth';
 import { whatsAppService } from '../app';
+import { DatabaseService } from '../services/DatabaseService';
 import { ApiResponse } from '../Types/api';
 import { isValidSessionId, isValidGroupName, isValidGroupDescription, isValidParticipants } from '../Utils/validation';
 
 const router = Router();
+const dbService = new DatabaseService();
+
+/**
+ * @swagger
+ * /api/groups/{sessionId}:
+ *   get:
+ *     summary: Get all groups for a session (from database)
+ *     tags: [Groups]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Groups retrieved successfully
+ *       404:
+ *         description: Session not found
+ */
+router.get('/:sessionId', [
+  param('sessionId').notEmpty().custom((value) => {
+    if (!isValidSessionId(value)) throw new Error('Invalid session ID format');
+    return true;
+  })
+], sessionMiddleware, handleValidationErrors, asyncHandler(async (req, res) => {
+  const { sessionId } = req.params;
+
+  try {
+    // Get groups from database (auto-synced by WhatsApp events)
+    const groups = await dbService.getGroups(sessionId);
+
+    // Format response with explicit groupId field for clarity
+    const formattedGroups = groups.map(group => ({
+      id: group.id,                    // Internal database ID
+      groupId: group.jid,               // WhatsApp Group ID (explicit)
+      jid: group.jid,                   // WhatsApp Group ID (alias)
+      subject: group.subject,           // Group name
+      description: group.description,   // Group description  
+      owner: group.owner,               // Group owner JID
+      participantCount: Array.isArray(group.participants) ? group.participants.length : 0,
+      participants: group.participants, // Full participant list
+      createdAt: group.createdAt,
+      updatedAt: group.updatedAt,
+      metadata: group.metadata          // Additional metadata from WhatsApp
+    }));
+
+    res.json({
+      success: true,
+      data: formattedGroups,
+      count: formattedGroups.length,
+      message: 'Groups retrieved successfully from database',
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    
+    // Handle session not found
+    if (errorMessage.includes('Session not found')) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found',
+        timestamp: new Date().toISOString()
+      } as ApiResponse);
+    }
+
+    res.status(400).json({
+      success: false,
+      error: errorMessage,
+      timestamp: new Date().toISOString()
+    } as ApiResponse);
+  }
+}));
 
 /**
  * @swagger

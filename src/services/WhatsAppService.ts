@@ -85,44 +85,17 @@ export class WhatsAppService {
 
   private async initializeWhatsAppConnection(sessionId: string, usePairingCode = false) {
     try {
-      logger.debug(`Initializing WhatsApp connection for session: ${sessionId}`);
-      
       const authDir = join(process.cwd(), 'auth_sessions', sessionId);
-      
-      // Ensure auth directory exists before initializing auth state
-      if (!existsSync(authDir)) {
-        mkdirSync(authDir, { recursive: true });
-        logger.debug(`Created auth directory for session: ${sessionId}`);
-      }
-      
-      logger.debug(`Loading auth state from: ${authDir}`);
       const { state, saveCreds } = await useMultiFileAuthState(authDir);
-      logger.debug(`Auth state loaded successfully for session: ${sessionId}`);
-      
-      logger.debug(`Fetching latest Baileys version`);
-      let version;
-      try {
-        const versionData = await fetchLatestBaileysVersion();
-        version = versionData;
-        logger.debug(`Baileys version fetched: ${version.version}`);
-      } catch (versionError) {
-        logger.warn(`Failed to fetch latest Baileys version, using fallback:`, versionError);
-        // Fallback to a reasonable default version
-        version = {
-          version: '6.0.0',
-          isLatest: false
-        };
-        logger.debug(`Using fallback Baileys version: ${version.version}`);
-      }
+      const { version } = await fetchLatestBaileysVersion();
 
-      // Use regular WhatsApp logger (don't filter - let Baileys handle all logs)
       const socket = makeWASocket({
         version,
-        logger: whatsappLogger as any,
+        logger: whatsappLogger,
         printQRInTerminal: false,
         auth: {
           creds: state.creds,
-          keys: makeCacheableSignalKeyStore(state.keys, whatsappLogger as any)
+          keys: makeCacheableSignalKeyStore(state.keys, whatsappLogger)
         },
         generateHighQualityLinkPreview: true,
         getMessage: async (key) => {
@@ -133,6 +106,8 @@ export class WhatsAppService {
           // };
         }
       });
+
+      // ADD 8-Maret-2026, FIX 1: Gunakan Map (.has dan .set) agar memori sesi tidak bocor
       if (!this.sessions.has(sessionId)) {
         this.sessions.set(sessionId, {} as WhatsAppSession);
       }
@@ -181,19 +156,7 @@ export class WhatsAppService {
       }
 
     } catch (error) {
-      // Use unfiltered logger for actual errors (not expected decryption issues)
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      const errorStack = error instanceof Error ? error.stack : '';
-      whatsappLogger.error(
-        `Failed to initialize WhatsApp connection for ${sessionId}: ${errorMsg}\n${errorStack}`,
-        error
-      );
-      logger.error({
-        sessionId,
-        error: errorMsg,
-        stack: errorStack
-      }, 'WhatsApp connection initialization failed');
-      
+      whatsappLogger.error(`Failed to initialize WhatsApp connection for ${sessionId}:`, error);
       const session = this.sessions.get(sessionId);
       if (session) {
         session.status = SessionStatus.ERROR;
@@ -242,33 +205,10 @@ export class WhatsAppService {
           this.initializeWhatsAppConnection(sessionId);
         }, 5000);
       } else {
-        // User logged out from phone - require re-authentication with new QR code
-        whatsappLogger.info(`Session ${sessionId} logged out from phone, re-initializing for re-authentication`);
-        
-        // Clear the socket and session state
-        if (session.socket) {
-          session.socket.end(undefined);
-          session.socket = null;
-        }
-        session.qrCode = undefined;
-        session.pairingCode = undefined;
-        
-        // Reset to DISCONNECTED first
+        whatsappLogger.info(`Session ${sessionId} logged out`);
         session.status = SessionStatus.DISCONNECTED;
-        await this.updateSessionInDatabase(sessionId, { 
-          status: 'DISCONNECTED',
-          qrCode: null,
-          pairingCode: null
-        });
+        await this.updateSessionInDatabase(sessionId, { status: 'DISCONNECTED' });
         this.emitSessionUpdate(sessionId);
-
-        // Re-initialize connection to show new QR code for re-login
-        setTimeout(() => {
-          whatsappLogger.info(`Re-initializing connection for ${sessionId} to show new QR code`);
-          this.initializeWhatsAppConnection(sessionId).catch(error => {
-            whatsappLogger.error(`Failed to re-initialize connection after logout for ${sessionId}:`, error);
-          });
-        }, 2000);
       }
     } else if (connection === 'open') {
       whatsappLogger.info(`Session ${sessionId} connected`);
